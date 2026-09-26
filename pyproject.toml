@@ -1,0 +1,9 @@
+[project]
+name = "forge-coding-harness"
+version = "0.1.0"
+description = "Autonomous coding harness with executable verification and inspectable evidence"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+forge = "forge.__main__:main"
