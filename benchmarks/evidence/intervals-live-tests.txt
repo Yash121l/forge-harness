@@ -1,0 +1,11 @@
+test_empty (test_solution.IntervalTests) ... ok
+test_negative (test_solution.IntervalTests) ... ok
+test_nested (test_solution.IntervalTests) ... ok
+test_non_mutating (test_solution.IntervalTests) ... ok
+test_single (test_solution.IntervalTests) ... ok
+test_touching (test_solution.IntervalTests) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.000s
+
+OK

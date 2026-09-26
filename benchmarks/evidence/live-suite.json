@@ -1,0 +1,34 @@
+{
+  "mode": "live-model",
+  "results": [
+    {
+      "case": "intervals",
+      "status": "failed",
+      "steps": 1,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "elapsed_seconds": 28.94,
+      "id": "20260926-203813-1db9a7"
+    },
+    {
+      "case": "csv",
+      "status": "failed",
+      "steps": 4,
+      "input_tokens": 7944,
+      "output_tokens": 228,
+      "elapsed_seconds": 79.05,
+      "id": "20260926-203842-409eb3"
+    },
+    {
+      "case": "cache",
+      "status": "failed",
+      "steps": 1,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "elapsed_seconds": 26.96,
+      "id": "20260926-204001-993936"
+    }
+  ],
+  "passed": 0,
+  "total": 3
+}

@@ -4,7 +4,8 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from unittest.mock import patch
 
-from forge.provider import ModelConfig, Provider, ProviderError
+from forge.provider import (DEFAULT_BASE_URL, DEFAULT_MODEL, DEFAULT_TOKEN_PARAMETER,
+                            ModelConfig, Provider, ProviderError)
 
 
 class MockServer:
@@ -51,7 +52,8 @@ def provider(url, **kwargs):
 class ProviderTests(unittest.TestCase):
     def test_payload_auth_tools_usage_and_tool_calls_preserved(self):
         msg = {"role": "assistant", "content": None,
-               "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}]}
+               "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"},
+                               "extra_content": {"google": {"thought_signature": "signed-data"}}}]}
         tools = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
         with MockServer([(200, {}, ok(msg))]) as server:
             result = provider(server.url).complete([{"role": "user", "content": "hi"}], tools)
@@ -60,7 +62,7 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(headers["Authorization"], "Bearer test-secret")
         self.assertEqual(payload["model"], "chosen-model")
         self.assertEqual(payload["tools"], tools)
-        self.assertEqual(payload["max_completion_tokens"], 4096)
+        self.assertEqual(payload["max_tokens"], 4096)
         self.assertNotIn("temperature", payload)
         self.assertEqual(result, {"message": msg, "input_tokens": 7, "output_tokens": 3})
 
@@ -72,12 +74,24 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(server.requests[0][2]["max_tokens"], 4096)
         self.assertEqual(server.requests[0][2]["temperature"], 0.2)
 
+    def test_gemini_defaults_use_key_only_and_allow_overrides(self):
+        with patch.dict("os.environ", {"AI_API_KEY": "k"}, clear=True):
+            config = ModelConfig.from_env()
+        self.assertEqual((config.model, config.base_url, config.token_parameter),
+                         (DEFAULT_MODEL, DEFAULT_BASE_URL, DEFAULT_TOKEN_PARAMETER))
+        with patch.dict("os.environ", {"AI_API_KEY": "k", "AI_MODEL": "chosen-model",
+                                        "AI_BASE_URL": "https://example.com/v1",
+                                        "AI_TOKEN_PARAMETER": "max_completion_tokens"}, clear=True):
+            overridden = ModelConfig.from_env()
+        self.assertEqual((overridden.model, overridden.base_url, overridden.token_parameter),
+                         ("chosen-model", "https://example.com/v1", "max_completion_tokens"))
+
     def test_retryable_status_retries_at_most_three_times_and_caps_delay(self):
         responses = [(429, {"Retry-After": "99"}, {}), (503, {}, {}), (200, {}, ok())]
         with MockServer(responses) as server, patch("forge.provider.time.sleep") as sleep:
             result = provider(server.url).complete([])
         self.assertEqual(len(server.requests), 3)
-        self.assertEqual([c.args[0] for c in sleep.call_args_list], [5.0, 1.0])
+        self.assertEqual([c.args[0] for c in sleep.call_args_list], [60.0, 1.0])
         self.assertEqual(result["input_tokens"], 7)
 
     def test_nonretryable_and_exhausted_errors_do_not_expose_body_or_key(self):
@@ -129,9 +143,54 @@ class ProviderTests(unittest.TestCase):
         self.assertNotIn("test-secret", repr(ModelConfig("test-secret", "m", "https://example.com/v1")))
 
     def test_config_rejects_non_finite_values(self):
-        for kwargs in ({"timeout": float("inf")}, {"temperature": float("nan")}, {"max_output_tokens": 1.5}):
+        for kwargs in ({"timeout": float("inf")}, {"temperature": float("nan")},
+                       {"max_output_tokens": 1.5}, {"request_interval": 61}):
             with self.assertRaises(ProviderError):
                 ModelConfig("k", "m", "https://example.com/v1", **kwargs)
+
+    def test_google_retry_info_delay_callback_and_quota_error_are_safe(self):
+        error = [{"error": {"message": "private provider text test-secret", "details": [
+            {"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [
+                {"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier", "quotaValue": "10"}]},
+            {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "11s"}]}}]
+        events = []
+        with MockServer([(429, {}, error), (200, {}, ok())]) as server, patch("forge.provider.time.sleep") as sleep:
+            result = Provider(ModelConfig("test-secret", "m", server.url),
+                              on_retry=lambda event, **data: events.append((event, data))).complete([])
+        self.assertEqual(result["output_tokens"], 3)
+        self.assertEqual(sleep.call_args_list[0].args[0], 11.0)
+        self.assertEqual(events[0], ("provider_retry", {"status": 429, "attempt": 1, "delay": 11.0}))
+        with MockServer([(429, {}, error), (429, {}, error), (429, {}, error)]) as server, patch("forge.provider.time.sleep"):
+            with self.assertRaisesRegex(ProviderError, "quota exhausted") as caught:
+                provider(server.url).complete([])
+        self.assertNotIn("private provider text", str(caught.exception))
+        self.assertNotIn("test-secret", str(caught.exception))
+
+    def test_daily_google_quota_stops_without_retry_and_reports_only_safe_limit(self):
+        daily_error = [{"error": {"message": "sensitive detail", "details": [
+            {"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [
+                {"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier", "quotaValue": "20",
+                 "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests"}]},
+            {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "11s"}]}}]
+        with MockServer([(429, {}, daily_error)]) as server, patch("forge.provider.time.sleep") as sleep:
+            with self.assertRaisesRegex(ProviderError, "Daily provider quota exhausted \(limit 20\)") as caught:
+                provider(server.url).complete([])
+        self.assertEqual(len(server.requests), 1)
+        sleep.assert_not_called()
+        self.assertNotIn("sensitive detail", str(caught.exception))
+
+    def test_cancelled_event_interrupts_retry_wait(self):
+        cancelled = threading.Event()
+        events = []
+        def on_retry(event, **data):
+            events.append(event)
+            cancelled.set()
+        with MockServer([(429, {"Retry-After": "50"}, {})]) as server:
+            client = Provider(ModelConfig("k", "m", server.url), on_retry=on_retry, cancelled=cancelled)
+            with self.assertRaisesRegex(ProviderError, "cancelled"):
+                client.complete([])
+        self.assertEqual(events, ["provider_retry"])
+        self.assertEqual(len(server.requests), 1)
 
 
 if __name__ == "__main__":

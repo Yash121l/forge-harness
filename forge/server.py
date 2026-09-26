@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from .core import Run
 from .demo import demo_run
+from .provider import DEFAULT_MODEL, DEFAULT_BASE_URL
 
 
 class Dashboard:
@@ -19,9 +20,9 @@ class Dashboard:
         self.active_id = None
 
     def config(self):
-        return {"model": os.environ.get("AI_MODEL", "Not configured"),
-                "base_url": os.environ.get("AI_BASE_URL", "https://api.openai.com/v1"),
-                "configured": bool(os.environ.get("AI_MODEL") and os.environ.get("AI_API_KEY"))}
+        return {"model": os.environ.get("AI_MODEL", DEFAULT_MODEL),
+                "base_url": os.environ.get("AI_BASE_URL", DEFAULT_BASE_URL),
+                "configured": bool(os.environ.get("AI_API_KEY"))}
 
     def start(self, task=None):
         with self.lock:
@@ -31,7 +32,7 @@ class Dashboard:
                 run = demo_run(root=self.root)
             else:
                 if not self.config()["configured"]:
-                    raise ValueError("Set AI_API_KEY and AI_MODEL in the server environment, then restart the dashboard.")
+                    raise ValueError("Set AI_API_KEY in the server environment, then restart the dashboard.")
                 run = Run(task["repo"], task["issue"], root=self.root,
                           test_command=task.get("test_command", ""), max_steps=int(task.get("max_steps", 40)))
             self.runs[run.id] = run

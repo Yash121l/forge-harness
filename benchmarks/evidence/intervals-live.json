@@ -1,0 +1,14 @@
+{
+  "model": "gemini-3.8-flash",
+  "run_id": "20260926-191810-ffed93",
+  "run_status": "failed",
+  "run_summary": "AI provider request failed (HTTP 429)",
+  "final_tool_completed": false,
+  "observed_test_pass": true,
+  "independent_patch_replay_exit": 0,
+  "input_tokens": 26436,
+  "output_tokens": 437,
+  "steps": 9,
+  "elapsed_seconds": 30.09,
+  "limitation": "Live model fixed the fixture and passed tests; quota interrupted before finish. This is not a completed live benchmark."
+}

@@ -17,3 +17,8 @@ jobs:
       - run: make test
       - run: make run < /dev/null
       - run: .venv/bin/python -m forge bench
+      - name: Build and run the disposable container
+        if: matrix.python == '3.12'
+        run: |
+          docker build -t forge-ci .
+          docker run --rm forge-ci demo

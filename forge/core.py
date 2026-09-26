@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -22,6 +23,7 @@ Reproduce the bug with a focused test before changing production code. Fix the u
 the smallest correct patch. Add regression coverage when it tests the reported behavior. Never remove,
 skip, or weaken existing tests to make a run green. Do not install unrelated dependencies or use network
 services. Do not git commit, reset, checkout, clean, or push. Your patch must remain in the worktree.
+Batch independent read/search calls in one response to reduce round trips. Once the patch is ready, finish reruns tests itself; an extra verify call is optional.
 Use exact edit_file replacements. After an error inspect the evidence and change approach; do not repeat
 identical failing calls. Use run_command to inspect or test; verify runs the final test command. The final
 finish tool re-runs verification, checks for a patch, and records actual evidence. A green command is
@@ -95,6 +97,41 @@ class Run:
         self.notes = ""
         self.baseline = None
         self.executor = None
+        self.resume_state = None
+
+    @classmethod
+    def resume(cls, directory, *, provider=None, max_steps=40, max_tokens=120000, max_seconds=900):
+        directory = Path(directory).resolve()
+        saved = json.loads((directory / "checkpoint.json").read_text())
+        previous = json.loads((directory / "report.json").read_text())
+        if previous["status"] == "verified":
+            raise ValueError("This run already completed verification")
+        if previous.get("demo"):
+            raise ValueError("Scripted demo runs do not support resume")
+        source = directory / "workspace"
+        probe = ToolExecutor(source, directory / "artifacts")
+        if probe.fingerprint() != saved["fingerprint"] or git(source, "rev-parse", "HEAD") != saved["base_commit"]:
+            raise ValueError("Workspace changed after checkpoint. Start a new run or restore its checkpoint state.")
+        run = cls(saved["repo"], saved["issue"], root=directory.parent, test_command=saved["test_command"],
+                  provider=provider, max_steps=max_steps, max_tokens=max_tokens, max_seconds=max_seconds)
+        shutil.copytree(source, run.directory / "workspace", symlinks=True)
+        run.resume_state = saved
+        run.base_commit = saved["base_commit"]
+        run.baseline = saved.get("baseline")
+        run.notes = saved.get("notes", "")
+        run.data["parent_run"] = previous["id"]
+        run.emit("resumed", parent_run=previous["id"], note="New attempt from saved conversation and unchanged workspace; fresh budgets.")
+        return run
+
+    def _save_checkpoint(self, messages):
+        config = getattr(self.provider, "config", None)
+        saved = dict(messages=messages, fingerprint=self.executor.fingerprint(), base_commit=self.base_commit,
+                     repo=str(self.repo), issue=self.issue, test_command=self.test_command,
+                     baseline=self.baseline, notes=self.notes, model=self.data["model"],
+                     base_url=getattr(config, "base_url", ""))
+        temporary = self.directory / "checkpoint.tmp"
+        temporary.write_text(redact(json.dumps(saved)))
+        temporary.replace(self.directory / "checkpoint.json")
 
     def emit(self, event_type, **data):
         with self.lock:
@@ -184,14 +221,22 @@ class Run:
     def execute(self):
         try:
             self.data["status"] = "running"
-            workspace = self._workspace()
+            if self.resume_state:
+                workspace = self.directory / "workspace"
+                self.executor = ToolExecutor(workspace, self.directory / "artifacts", self.emit, cancelled=self.cancelled)
+                self.data.update(workspace=str(workspace), base_commit=self.base_commit)
+            else:
+                workspace = self._workspace()
             if self.provider is None:
                 from .provider import Provider
-                self.provider = Provider()
+                self.provider = Provider(on_retry=self.emit, cancelled=self.cancelled)
             config = getattr(self.provider, "config", None)
             self.data["model"] = "scripted-fixture" if self.demo else getattr(config, "model", "configured")
+            if self.resume_state:
+                if self.resume_state["model"] != self.data["model"] or self.resume_state["base_url"] != getattr(config, "base_url", ""):
+                    raise ValueError("Resume requires the same model and provider endpoint as the original run")
             self.emit("started", model=self.data["model"], demo=self.demo, max_steps=self.max_steps)
-            if self.test_command:
+            if self.test_command and not self.resume_state:
                 self.emit("phase", phase="reproduce")
                 self.baseline = self.executor.execute("run_command", {"command": self.test_command, "timeout": min(120, max(0.1, self.max_seconds - (time.time() - self.started)))})
                 self.emit("baseline", command=self.test_command, exit_code=self.baseline.get("exit_code"), output=self.baseline.get("output", ""))
@@ -199,7 +244,10 @@ class Run:
             messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content":
                 "Issue:\n" + self.issue + "\nRepository inventory:\n" + json.dumps(inventory) +
                 "\nConfigured verification: " + (self.test_command or "Choose relevant tests after inspecting the repo.") +
-                "\nBaseline result:\n" + json.dumps(self.baseline)}]
+                "\nBaseline result (already executed; use this evidence without repeating it unnecessarily):\n" + json.dumps(self.baseline)}]
+            if self.resume_state:
+                messages = self.resume_state["messages"]
+                messages.append({"role": "user", "content": "Resume from the retained workspace. Prior commands and patch are preserved; recheck evidence before finishing."})
             schemas = self.executor.schemas() + EXTRA_TOOLS
             repeats = {}
             for step in range(1, self.max_steps + 1):
@@ -211,6 +259,7 @@ class Run:
                     break
                 self.data["steps"] = step
                 messages = self._compact(messages)
+                self._save_checkpoint(messages)
                 response = self.provider.complete(messages, schemas)
                 self.data["input_tokens"] += response.get("input_tokens", 0)
                 self.data["output_tokens"] += response.get("output_tokens", 0)
@@ -231,7 +280,7 @@ class Run:
                 calls = message.get("tool_calls") or []
                 if not calls:
                     messages.append({"role": "user", "content": "Continue with tools. Use finish only after implementing and testing the patch."})
-                for call in calls[:16]:
+                for call_index, call in enumerate(calls):
                     if self.cancelled.is_set() or time.time() - self.started >= self.max_seconds:
                         break
                     name = call["function"]["name"]
@@ -243,7 +292,9 @@ class Run:
                         signature = name + json.dumps(args, sort_keys=True)
                         repeats[signature] = repeats.get(signature, 0) + 1
                         self.emit("tool_call", name=name, arguments=args, step=step)
-                        if repeats[signature] > 3 and name not in ("verify", "finish"):
+                        if call_index >= 16:
+                            result = {"ok": False, "error": "At most 16 tool calls per response; request remaining work on the next turn."}
+                        elif repeats[signature] > 3 and name not in ("verify", "finish"):
                             result = {"ok": False, "error": "Repeated identical call blocked. Inspect evidence and change approach."}
                         elif name == "checkpoint":
                             phase = args.get("phase", "explore")
@@ -272,14 +323,29 @@ class Run:
                         break
                 if self.data["status"] == "verified":
                     break
+                answered = set()
+                for item in reversed(messages):
+                    if item.get("role") != "tool":
+                        break
+                    answered.add(item["tool_call_id"])
+                for skipped in calls:
+                    if skipped["id"] not in answered:
+                        messages.append({"role": "tool", "tool_call_id": skipped["id"],
+                                         "content": '{"ok":false,"error":"Not executed: run interrupted before this action."}'})
+                self._save_checkpoint(messages)
             else:
                 self.data.update(status="budget_exhausted", summary="Step limit reached; partial patch preserved.")
             if self.data["status"] == "running":
                 self.data.update(status="budget_exhausted", summary="Run budget reached; partial patch preserved.")
             if self.cancelled.is_set() and self.data["status"] != "verified":
                 self.data.update(status="cancelled", summary="Run cancelled; partial patch preserved.")
+        except KeyboardInterrupt:
+            self.cancelled.set()
+            self.data.update(status="cancelled", summary="Interrupted by keyboard; partial patch preserved.")
+            self.emit("cancelled", message=self.data["summary"])
+            raise
         except Exception as error:
-            self.data.update(status="failed", summary=redact(str(error)))
+            self.data.update(status="cancelled" if self.cancelled.is_set() else "failed", summary=redact(str(error)))
             self.emit("error", message=redact(str(error)))
         finally:
             if self.executor:

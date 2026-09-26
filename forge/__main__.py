@@ -50,6 +50,12 @@ def main():
     solve.add_argument("--max-tokens", type=int, default=120000)
     solve.add_argument("--max-seconds", type=int, default=900)
     solve.add_argument("--json", action="store_true")
+    resume = sub.add_parser("resume", help="Resume an interrupted live run from its saved checkpoint")
+    resume.add_argument("directory", help="Path to .forge/runs/<id>")
+    resume.add_argument("--max-steps", type=int, default=40)
+    resume.add_argument("--max-tokens", type=int, default=120000)
+    resume.add_argument("--max-seconds", type=int, default=900)
+    resume.add_argument("--json", action="store_true")
     demo = sub.add_parser("demo", help="Run a scripted fixture, without a model or credentials")
     demo.add_argument("--case", choices=["intervals", "csv", "cache"], default="intervals")
     demo.add_argument("--json", action="store_true")
@@ -63,6 +69,10 @@ def main():
             from .server import serve
             serve(args.port)
             return 0
+        if args.command == "resume":
+            from .core import Run
+            return run_with_progress(Run.resume(args.directory, max_steps=args.max_steps,
+                max_tokens=args.max_tokens, max_seconds=args.max_seconds), args.json)
         if args.command == "demo":
             from .demo import demo_run
             return run_with_progress(demo_run(case=args.case), args.json)
@@ -77,7 +87,7 @@ def main():
             report = {"mode": "live-model" if args.live else "scripted-infrastructure", "results": results,
                       "passed": sum(r["status"] == "verified" for r in results), "total": len(results)}
             Path(".forge").mkdir(exist_ok=True)
-            Path(".forge/benchmark.json").write_text(json.dumps(report, indent=2))
+            Path(".forge/benchmark-" + ("live" if args.live else "scripted") + ".json").write_text(json.dumps(report, indent=2))
             print(json.dumps(report, indent=2))
             return 0 if report["passed"] == report["total"] else 1
         if args.command == "solve":
