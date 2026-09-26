@@ -10,7 +10,7 @@ The three scripted fixtures cover interval merging, CSV parsing, and TTL expiry.
 
 The dashboard was also exercised in the browser: starting a scripted run, observing verified completion, inspecting its patch and evidence, and viewing archived runs. `make run` was exercised in an interactive terminal through its demo option.
 
-GitHub Actions runs clean-checkout setup, tests, the standard launch command, and the fixture suite on Python 3.9 and 3.12. The Python 3.12 job also builds the Docker image and runs its demo. Consult the latest completed workflow for the current result.
+GitHub Actions runs clean-checkout setup, tests, the standard launch command, and the fixture suite on Python 3.9 and 3.12. The Python 3.12 job also builds the Docker image and runs its demo. Both Python jobs, the Docker build, and the container demo passed in [workflow 36251330798](https://github.com/Yash121l/forge-harness/actions/runs/36251330798) at commit `5a68d76`. The suite contains 50 automated tests.
 
 ## Live Gemini evidence
 

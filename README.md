@@ -96,7 +96,7 @@ The three fixtures cover interval merging, CSV quoting, and TTL cache expiry. Th
 
 Shell commands execute with the runner's permissions. A cloned worktree protects the original Git state; it is not a security sandbox. File tools block repository escapes and common secret paths, but shell commands can bypass those restrictions. Use trusted repositories or a disposable environment with only the required mounts and credentials.
 
-The included Dockerfile packages Python 3.12, Git, and Make. Container behavior depends on the host's Docker setup and mounts; the Docker path has not yet been validated as part of this build.
+The included Dockerfile packages Python 3.12, Git, and Make. Its build and scripted demo passed in [clean Linux CI](https://github.com/Yash121l/forge-harness/actions/runs/36251330798). Container behavior still depends on the host's mounts and the target project's dependencies.
 
 ```sh
 docker build -t forge .
