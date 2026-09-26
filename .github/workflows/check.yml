@@ -1,0 +1,19 @@
+name: Evaluate Forge
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.9', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: make setup
+      - run: make test
+      - run: make run < /dev/null
+      - run: .venv/bin/python -m forge bench

@@ -1,0 +1,6 @@
+.git
+.forge
+.venv
+.env*
+__pycache__
+output
