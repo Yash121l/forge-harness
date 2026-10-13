@@ -1,7 +1,8 @@
 PYTHON ?= python3
+RUFF ?= ruff
 ARGS ?=
 
-.PHONY: setup run test demo dashboard clean
+.PHONY: setup run test lint demo dashboard clean
 setup:
 	$(PYTHON) scripts/check_runtime.py
 	$(PYTHON) -m venv .venv
@@ -12,6 +13,9 @@ run:
 
 test:
 	$(PYTHON) -m unittest discover -s tests -v
+
+lint:
+	$(RUFF) check .
 
 demo:
 	$(PYTHON) -m forge demo
