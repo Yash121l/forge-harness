@@ -10,7 +10,6 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
 
 from .tools import ToolExecutor
 

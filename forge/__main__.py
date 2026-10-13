@@ -1,7 +1,6 @@
 """Standard evaluation entry point and local operator console."""
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 

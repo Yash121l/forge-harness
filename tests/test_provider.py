@@ -173,7 +173,7 @@ class ProviderTests(unittest.TestCase):
                  "quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests"}]},
             {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "11s"}]}}]
         with MockServer([(429, {}, daily_error)]) as server, patch("forge.provider.time.sleep") as sleep:
-            with self.assertRaisesRegex(ProviderError, "Daily provider quota exhausted \(limit 20\)") as caught:
+            with self.assertRaisesRegex(ProviderError, r"Daily provider quota exhausted \(limit 20\)") as caught:
                 provider(server.url).complete([])
         self.assertEqual(len(server.requests), 1)
         sleep.assert_not_called()

@@ -14,6 +14,8 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: make setup
+      - run: pip install ruff==0.17.0
+      - run: make lint
       - run: make test
       - run: make run < /dev/null
       - run: .venv/bin/python -m forge bench
